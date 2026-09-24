@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    body { background: #f4f6f8; color: #1a1a1a; padding: 20px; }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+    .header h1 { font-size: 24px; font-weight: 700; }
+    .btn { background: #2563eb; color: white; border: none; padding: 10px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+    .btn:hover { background: #1d4ed8; }
+    .card { background: white; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+    .company { font-weight: 600; font-size: 16px; }
+    .position { color: #555; margin: 4px 0; }
+    .meta { font-size: 13px; color: #888; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; }
+    .Applied { background: #dbeafe; color: #1e40af; }
+    .Interview { background: #ffedd5; color: #c2410c; }
+    .Offer { background: #dcfce7; color: #15803d; }
+    .Rejected { background: #fee2e2; color: #b91c1c; }
+    .Under { background: #fef9c3; color: #a16207; }
+    .Assessment { background: #f3e8ff; color: #7e22ce; }
+    #formModal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 100; align-items: center; justify-content: center; }
+    .modal { background: white; border-radius: 16px; padding: 24px; width: 90%; max-width: 420px; }
+    .modal h2 { margin-bottom: 16px; }
+    input, select, textarea { width: 100%; padding: 10px; margin-bottom: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 15px; }
+    .modal-actions { display: flex; gap: 10px; margin-top: 8px; }
+    .modal-actions button { flex: 1; }
+    .cancel { background: #e5e7eb; color: #333; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>Job Tracker</h1>
+    <button class="btn" onclick="openForm()">+ Add</button>
+  </div>
+
+  <div id="list"></div>
+
+  <div id="formModal">
+    <div class="modal">
+      <h2>Add New Application</h2>
+      <input id="company" placeholder="Company *" required>
+      <input id="position" placeholder="Position *" required>
+      <select id="type">
+        <option>Job</option>
+        <option>Internship</option>
+        <option>Other</option>
+      </select>
+      <select id="status">
+        <option>Applied</option>
+        <option>Interview</option>
+        <option>Offer</option>
+        <option>Rejected</option>
+        <option>Under Review</option>
+        <option>Assessment</option>
+      </select>
+      <input id="link" placeholder="Application link (optional)">
+      <textarea id="notes" placeholder="Notes (optional)" rows="3"></textarea>
+      <div class="modal-actions">
+        <button class="btn cancel" onclick="closeForm()">Cancel</button>
+        <button class="btn" onclick="saveApp()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function loadApps() {
+      google.script.run.withSuccessHandler(function(apps) {
+        const list = document.getElementById("list");
+        list.innerHTML = "";
+        if (!apps.length) {
+          list.innerHTML = "<p style='text-align:center;color:#888;margin-top:40px;'>No applications yet</p>";
+          return;
+        }
+        apps.forEach(app => {
+          const badgeClass = (app.status || "").replace(" ", "");
+          list.innerHTML += `
+            <div class="card">
+              <div class="company">${app.company || ""}</div>
+              <div class="position">${app.position || ""}</div>
+              <div class="meta">${app.date_applied || ""} · <span class="badge ${badgeClass}">${app.status || ""}</span></div>
+            </div>`;
+        });
+      }).getApplications();
+    }
+
+    function openForm() { document.getElementById("formModal").style.display = "flex"; }
+    function closeForm() { document.getElementById("formModal").style.display = "none"; }
+
+    function saveApp() {
+      const app = {
+        company: document.getElementById("company").value.trim(),
+        position: document.getElementById("position").value.trim(),
+        type: document.getElementById("type").value,
+        status: document.getElementById("status").value,
+        link: document.getElementById("link").value.trim(),
+        notes: document.getElementById("notes").value.trim()
+      };
+      if (!app.company || !app.position) {
+        alert("Company and Position are required");
+        return;
+      }
+
+      google.script.run.withSuccessHandler(function() {
+        closeForm();
+        loadApps();
+        document.getElementById("company").value = "";
+        document.getElementById("position").value = "";
+        document.getElementById("link").value = "";
+        document.getElementById("notes").value = "";
+      }).addApplication(app);
+    }
+
+    loadApps();
+  </script>
+</body>
+</html>
