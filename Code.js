@@ -1,8 +1,7 @@
 // ===== CONFIG =====
-const SHEET_NAME = "Sheet1";
 const EMAIL = "pasemeit@gmail.com";
 
-// ===== KEYWORDS =====
+// Strictly target application SUBMISSION confirmations
 const KEYWORDS = [
   "thank you for applying",
   "thank you for taking the time to submit your application",
@@ -14,9 +13,25 @@ const KEYWORDS = [
   "application confirmation",
   "thanks for your application",
   "thanks for applying",
-  "submit your application",
-  "we received your application",
-  "application for"
+  "we received your application"
+];
+
+// Keywords that indicate it's NOT a completed application
+const EXCLUDE_KEYWORDS = [
+  "one-time passcode",
+  "verification code",
+  "passcode",
+  "draft",
+  "incomplete application",
+  "complete your application",
+  "action required",
+  "finish your application"
+];
+
+// Portal domains to ignore when guessing company name from sender email
+const PORTAL_DOMAINS = [
+  "greenhouse", "workday", "successfactors", "lever", 
+  "smartrecruiters", "myworkday", "ashbyhq", "gmail", "outlook", "us"
 ];
 
 // ===== WEB APP =====
@@ -27,22 +42,58 @@ function doGet() {
 }
 
 function getApplications() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheets()[0];
   const data = sheet.getDataRange().getValues();
-  const headers = data[0];
-  const rows = data.slice(1).filter(r => r[0] !== "");
 
-  return rows.map(row => {
-    let obj = {};
-    headers.forEach((h, i) => obj[h] = row[i]);
-    return obj;
-  }).reverse(); // newest first
+  if (data.length < 2) return [];
+
+  const headers = data[0].map(h => String(h).toLowerCase().trim());
+  
+  // Dynamic header column matching
+  const idIdx = headers.indexOf("id");
+  const dateIdx = headers.indexOf("date_applied") !== -1 ? headers.indexOf("date_applied") : headers.indexOf("date");
+  const companyIdx = headers.indexOf("company");
+  const positionIdx = headers.indexOf("position");
+  const typeIdx = headers.indexOf("type");
+  const statusIdx = headers.indexOf("status");
+  const linkIdx = headers.indexOf("link");
+  const notesIdx = headers.indexOf("notes");
+
+  const rows = data.slice(1).filter(r => r[0] !== "" && r[0] !== null && r[0] !== undefined);
+
+  const result = rows.map(row => {
+    let rawDate = row[dateIdx];
+    let formattedDate = rawDate;
+    if (rawDate instanceof Date) {
+      formattedDate = Utilities.formatDate(rawDate, Session.getScriptTimeZone(), "yyyy-MM-dd");
+    }
+
+    return {
+      id: row[idIdx] !== undefined ? row[idIdx] : "",
+      date_applied: formattedDate || "",
+      company: row[companyIdx] || "Unknown",
+      position: row[positionIdx] || "N/A",
+      type: row[typeIdx] || "Job",
+      status: row[statusIdx] || "Applied",
+      link: row[linkIdx] || "",
+      notes: row[notesIdx] || ""
+    };
+  }).reverse();
+
+  return result;
+}
+
+function getNextId(sheet) {
+  const data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return 1;
+  const ids = data.slice(1).map(r => Number(r[0])).filter(id => !isNaN(id) && id > 0);
+  return ids.length > 0 ? Math.max(...ids) + 1 : 1;
 }
 
 function addApplication(app) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
-  const lastRow = sheet.getLastRow();
-  const newId = lastRow <= 1 ? 1 : Number(sheet.getRange(lastRow, 1).getValue()) + 1;
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
+  const newId = getNextId(sheet);
 
   sheet.appendRow([
     newId,
@@ -59,7 +110,7 @@ function addApplication(app) {
 }
 
 function updateStatus(id, newStatus) {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
   const data = sheet.getDataRange().getValues();
 
   for (let i = 1; i < data.length; i++) {
@@ -73,86 +124,75 @@ function updateStatus(id, newStatus) {
 
 // ===== EMAIL LOGGER =====
 function checkEmailsAndLog() {
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(SHEET_NAME);
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheets()[0];
   const data = sheet.getDataRange().getValues();
   const existing = data.slice(1).map(r => (String(r[2]) + " " + String(r[3])).toLowerCase());
 
-  Logger.log("Existing entries: " + existing.length);
-
   const query = "newer_than:10d (" + KEYWORDS.map(k => `"${k}"`).join(" OR ") + ")";
   const threads = GmailApp.search(query, 0, 40);
-  Logger.log("Threads found: " + threads.length);
 
-  threads.forEach((thread, index) => {
+  threads.forEach(thread => {
     const msg = thread.getMessages().pop();
     const subject = msg.getSubject() || "";
-    const body = msg.getPlainBody().substring(0, 1200) || "";
+    const body = msg.getPlainBody().substring(0, 1500) || "";
     const fullText = (subject + " " + body).toLowerCase();
     const date = Utilities.formatDate(msg.getDate(), Session.getScriptTimeZone(), "yyyy-MM-dd");
 
-    Logger.log("----- Email " + (index + 1) + " -----");
-    Logger.log("Subject: " + subject);
+    // 1. Exclude one-time passcodes and incomplete draft reminders
+    if (EXCLUDE_KEYWORDS.some(ex => fullText.includes(ex))) return;
 
+    // 2. Validate keyword match
     const matchedKeyword = KEYWORDS.find(k => fullText.includes(k.toLowerCase()));
-    if (!matchedKeyword) {
-      Logger.log("SKIPPED: No keyword matched");
-      return;
+    if (!matchedKeyword) return;
+
+    // 3. Extract Company Name (Subject line first, then domain)
+    let company = "";
+    const subMatch = subject.match(/(?:at|to|with)\s+([A-Z0-9\s&]+)(?:$|\s+for|\!|\.)/i);
+    if (subMatch && subMatch[1] && subMatch[1].trim().length > 1) {
+      company = subMatch[1].trim();
     }
 
-    // Company detection
-    let company = "Unknown Company";
-    if (fullText.includes("microsoft")) company = "Microsoft";
-    else if (fullText.includes("google")) company = "Google";
-    else if (fullText.includes("amazon") || fullText.includes("aws")) company = "Amazon";
-    else if (fullText.includes("meta") || fullText.includes("facebook")) company = "Meta";
-    else if (fullText.includes("apple")) company = "Apple";
-    else if (fullText.includes("netflix")) company = "Netflix";
-    else if (fullText.includes("stripe")) company = "Stripe";
-    else if (fullText.includes("aicines")) company = "AICines";
-    else {
+    if (!company) {
       const from = msg.getFrom() || "";
-      const match = from.match(/@([a-z0-9.-]+)/i);
-      if (match) {
-        company = match[1].split('.')[0];
-        company = company.charAt(0).toUpperCase() + company.slice(1);
+      const domainMatch = from.match(/@([a-z0-9.-]+)/i);
+      if (domainMatch) {
+        let domainParts = domainMatch[1].toLowerCase().split('.');
+        let mainDomain = domainParts.length > 2 ? domainParts[domainParts.length - 2] : domainParts[0];
+        if (!PORTAL_DOMAINS.includes(mainDomain)) {
+          company = mainDomain.charAt(0).toUpperCase() + mainDomain.slice(1);
+        }
       }
     }
-    Logger.log("Company: " + company);
+    if (!company) company = "Unknown Company";
 
-    // Position extraction (improved for Microsoft and others)
+    // 4. Extract Position Title
     let position = "";
-
-    // Microsoft style
-    let match = body.match(/application for\s+(.+?)(?:\s*\(Job number|\.\s+We’re glad|\.\s+You may not|Thank you,)/i);
-    if (match && match[1]) {
-      position = match[1].trim();
+    let posMatch = body.match(/(?:application for|position of|role:?)\s+([A-Za-z0-9\s\-\/]{4,40})/i);
+    if (posMatch && posMatch[1]) {
+      position = posMatch[1].split("\n")[0].trim();
     }
 
-    // Fallback cleaning of subject
-    if (!position || position.length < 8) {
+    if (!position || position.length < 4) {
       position = subject
-        .replace(/thank you for (your )?application!?/gi, "")
+        .replace(/thank you for (your )?application/gi, "")
         .replace(/thanks for applying( to)?/gi, "")
         .replace(/we received your .* application/gi, "")
         .replace(/application for/gi, "")
         .replace(/re:|fw:|fwd:/gi, "")
+        .replace(/\[.*?\]/g, "")
         .trim();
     }
 
-    if (!position || position.length < 5) position = "Application";
-    Logger.log("Position: " + position);
+    if (!position || position.length < 3 || position.toLowerCase().startsWith("thank you")) {
+      position = "Application Submitted";
+    }
 
-    // Duplicate check
-    const key = (company + " " + position).toLowerCase();
-    if (existing.some(e => e.includes(company.toLowerCase()) && e.includes(position.toLowerCase().substring(0, 18)))) {
-      Logger.log("SKIPPED: Already exists");
+    // 5. Prevent Duplicates
+    if (existing.some(e => e.includes(company.toLowerCase()) && e.includes(position.toLowerCase().substring(0, 15)))) {
       return;
     }
 
-    // Add to sheet
-    const lastRow = sheet.getLastRow();
-    const newId = lastRow <= 1 ? 1 : Number(sheet.getRange(lastRow, 1).getValue()) + 1;
-
+    const newId = getNextId(sheet);
     const type = (position.toLowerCase().includes("intern") || fullText.includes("intern")) ? "Internship" : "Job";
 
     sheet.appendRow([
@@ -163,12 +203,9 @@ function checkEmailsAndLog() {
       type,
       "Applied",
       "",
-      "Auto-logged: " + subject.substring(0, 70)
+      "Auto-logged from email: " + subject.substring(0, 70)
     ]);
 
-    existing.push(key);
-    Logger.log("ADDED: " + company + " → " + position);
+    existing.push((company + " " + position).toLowerCase());
   });
-
-  Logger.log("Finished.");
 }

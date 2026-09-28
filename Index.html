@@ -67,27 +67,40 @@
 
   <script>
     function loadApps() {
-      google.script.run.withSuccessHandler(function(apps) {
-        const list = document.getElementById("list");
-        list.innerHTML = "";
-        if (!apps.length) {
-          list.innerHTML = "<p style='text-align:center;color:#888;margin-top:40px;'>No applications yet</p>";
-          return;
-        }
-        apps.forEach(app => {
-          const badgeClass = (app.status || "").replace(" ", "");
-          list.innerHTML += `
-            <div class="card">
-              <div class="company">${app.company || ""}</div>
-              <div class="position">${app.position || ""}</div>
-              <div class="meta">${app.date_applied || ""} · <span class="badge ${badgeClass}">${app.status || ""}</span></div>
-            </div>`;
-        });
-      }).getApplications();
+      google.script.run
+        .withSuccessHandler(function(apps) {
+          const list = document.getElementById("list");
+          list.innerHTML = "";
+
+          if (!apps || !apps.length) {
+            list.innerHTML = "<p style='text-align:center;color:#888;margin-top:40px;'>No applications yet</p>";
+            return;
+          }
+
+          apps.forEach(app => {
+            const badgeClass = (app.status || "").replace(" ", "");
+            list.innerHTML += `
+              <div class="card">
+                <div class="company">${app.company || ""}</div>
+                <div class="position">${app.position || ""}</div>
+                <div class="meta">${app.date_applied || ""} · <span class="badge ${badgeClass}">${app.status || ""}</span></div>
+              </div>`;
+          });
+        })
+        .withFailureHandler(function(error) {
+          document.getElementById("list").innerHTML = 
+            "<p style='color:red; padding:20px;'>Error loading applications:<br><br>" + error.message + "</p>";
+        })
+        .getApplications();
     }
 
-    function openForm() { document.getElementById("formModal").style.display = "flex"; }
-    function closeForm() { document.getElementById("formModal").style.display = "none"; }
+    function openForm() {
+      document.getElementById("formModal").style.display = "flex";
+    }
+
+    function closeForm() {
+      document.getElementById("formModal").style.display = "none";
+    }
 
     function saveApp() {
       const app = {
@@ -98,19 +111,25 @@
         link: document.getElementById("link").value.trim(),
         notes: document.getElementById("notes").value.trim()
       };
+
       if (!app.company || !app.position) {
         alert("Company and Position are required");
         return;
       }
 
-      google.script.run.withSuccessHandler(function() {
-        closeForm();
-        loadApps();
-        document.getElementById("company").value = "";
-        document.getElementById("position").value = "";
-        document.getElementById("link").value = "";
-        document.getElementById("notes").value = "";
-      }).addApplication(app);
+      google.script.run
+        .withSuccessHandler(function() {
+          closeForm();
+          loadApps();
+          document.getElementById("company").value = "";
+          document.getElementById("position").value = "";
+          document.getElementById("link").value = "";
+          document.getElementById("notes").value = "";
+        })
+        .withFailureHandler(function(error) {
+          alert("Error saving: " + error.message);
+        })
+        .addApplication(app);
     }
 
     loadApps();
